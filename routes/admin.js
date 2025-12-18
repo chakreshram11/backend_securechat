@@ -6,32 +6,40 @@ const auth = require("../middleware/auth");
 const isAdmin = require("../middleware/isAdmin");
 
 const router = express.Router();
+const crypto = require("crypto");
+const { encryptPrivateKey } = require("../utils/crypto");
 
 /* -------- User Management -------- */
-/* -------- User Management -------- */
-router.get("/users", auth, isAdmin, async (req, res) => {
-  const users = await User.find().select("-passwordHash");
-  res.json(users);
-});
-
 router.post("/users", auth, isAdmin, async (req, res) => {
   try {
     const { username, password, displayName, role } = req.body;
 
     const existing = await User.findOne({ username });
-    if (existing)
+    if (existing) {
       return res.status(400).json({ error: "Username already exists" });
+    }
+
+    // 🔐 Generate ECDH key pair
+    const ecdh = crypto.createECDH("prime256v1");
+    ecdh.generateKeys();
+
+    const ecdhPublicKey = ecdh.getPublicKey("base64");
+    const ecdhPrivateKey = ecdh.getPrivateKey("base64");
 
     const passwordHash = await bcrypt.hash(password, 12);
+
     const user = new User({
       username,
       passwordHash,
       displayName,
       role: role || "user",
+      ecdhPublicKey,
+      ecdhPrivateKeyEnc: encryptPrivateKey(ecdhPrivateKey),
     });
+
     await user.save();
 
-    // ✅ Emit unified socket event for creation
+    // 🔔 Socket broadcast
     const io = req.app.get("io");
     if (io) {
       io.emit("user:new", {
@@ -41,14 +49,11 @@ router.post("/users", auth, isAdmin, async (req, res) => {
         role: user.role,
       });
 
-      // 💬 Optional: broadcast welcome message
       io.emit("message", {
         type: "system",
-        ciphertext: `🎉 ${user.displayName || user.username} has been added by Admin!`,
+        ciphertext: `🎉 ${user.displayName || user.username} was added by Admin.`,
         createdAt: new Date(),
       });
-
-      console.log(`📢 Admin added new user: ${user.username}`);
     }
 
     res.json({
