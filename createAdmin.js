@@ -11,8 +11,8 @@ async function createAdmin() {
     await mongoose.connect(MONGO_URI);
     console.log("✅ MongoDB connected");
 
-    const username = "admin";
-    const password = "admin123"; // change later
+    const username = "server";
+    const password = "server"; // change later
     const displayName = "Administrator";
 
     // ❌ Prevent duplicate admin
@@ -22,12 +22,24 @@ async function createAdmin() {
       process.exit(0);
     }
 
-    // 🔑 Generate ECDH key pair (Node)
-    const ecdh = crypto.createECDH("prime256v1");
-    ecdh.generateKeys();
+const { generateKeyPairSync } = require("crypto");
 
-    const ecdhPublicKey = ecdh.getPublicKey("base64");
-    const ecdhPrivateKey = ecdh.getPrivateKey("base64");
+// 🔐 Generate admin ECDH key pair (PKCS8 compatible)
+const { publicKey, privateKey } = generateKeyPairSync("ec", {
+  namedCurve: "prime256v1",
+  publicKeyEncoding: {
+    type: "spki",
+    format: "der",
+  },
+  privateKeyEncoding: {
+    type: "pkcs8",
+    format: "der",
+  },
+});
+
+const ecdhPublicKey = publicKey.toString("base64");
+const ecdhPrivateKey = privateKey.toString("base64");
+
 
     const passwordHash = await bcrypt.hash(password, 12);
 

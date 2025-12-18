@@ -204,26 +204,27 @@ const { encryptPrivateKey, decryptPrivateKey } = require("../utils/crypto");
 const auth = require("../middleware/auth");
 const isAdmin = require("../middleware/isAdmin");
 
+
 const router = express.Router();
 
 /* -------- Register -------- */
 router.post("/register", async (req, res) => {
   try {
-    const {
-      username,
-      password,
-      displayName,
-      ecdhPublicKey,
-      ecdhPrivateKey, // 🔑 REQUIRED
-    } = req.body;
-
-    if (!ecdhPublicKey || !ecdhPrivateKey) {
-      return res.status(400).json({ error: "Missing ECDH keys" });
-    }
+    const { username, password, displayName } = req.body;
 
     if (await User.findOne({ username })) {
       return res.status(400).json({ error: "User already exists" });
     }
+
+    // 🔐 Generate ECDH key pair (PKCS8 – browser compatible)
+    const { publicKey, privateKey } = generateKeyPairSync("ec", {
+      namedCurve: "prime256v1", // P-256
+      publicKeyEncoding: { type: "spki", format: "der" },
+      privateKeyEncoding: { type: "pkcs8", format: "der" },
+    });
+
+    const ecdhPublicKey = publicKey.toString("base64");
+    const ecdhPrivateKey = privateKey.toString("base64");
 
     const passwordHash = await bcrypt.hash(password, 12);
 
@@ -238,9 +239,11 @@ router.post("/register", async (req, res) => {
 
     await user.save();
 
-    const token = jwt.sign({ id: user._id, role: user.role }, JWT_SECRET, {
-      expiresIn: "7d",
-    });
+    const token = jwt.sign(
+      { id: user._id, role: user.role },
+      JWT_SECRET,
+      { expiresIn: "7d" }
+    );
 
     res.json({
       token,
@@ -257,6 +260,8 @@ router.post("/register", async (req, res) => {
     res.status(500).json({ error: "Server error" });
   }
 });
+
+
 router.post("/login", async (req, res) => {
   try {
     const { username, password } = req.body;

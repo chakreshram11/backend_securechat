@@ -29,14 +29,19 @@ router.get('/', auth, async (req, res) => {
 });
 
 // 📌 Get user by ID
-router.get('/:id', auth, async (req, res) => {
+router.get("/:id", auth, async (req, res) => {
   try {
-    const u = await User.findById(req.params.id)
-      .select('username displayName _id ecdhPublicKey role createdAt');
-    if (!u) return res.status(404).json({ error: 'not found' });
-    res.json(u.toObject());
+    const user = await User.findById(req.params.id).select(
+      "username displayName ecdhPublicKey"
+    );
+
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    res.json(user);
   } catch (err) {
-    console.error("❌ Error fetching user:", err.message);
+    console.error("❌ /api/users/:id error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
