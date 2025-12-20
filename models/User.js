@@ -14,6 +14,7 @@ const UserSchema = new mongoose.Schema(
 
     // ✅ Encryption
     ecdhPublicKey: { type: String, default: null }, // always stored at register
+    ecdhPrivateKeyEncrypted: { type: String, default: null }, // encrypted private key (server-generated)
   },
   { timestamps: true }
 );

@@ -4,6 +4,7 @@ const User = require("../models/User");
 const Group = require("../models/Group");
 const auth = require("../middleware/auth");
 const isAdmin = require("../middleware/isAdmin");
+const { generateECDHKeyPair, encryptPrivateKey } = require("../utils/crypto");
 
 const router = express.Router();
 
@@ -23,11 +24,20 @@ router.post("/users", auth, isAdmin, async (req, res) => {
       return res.status(400).json({ error: "Username already exists" });
 
     const passwordHash = await bcrypt.hash(password, 12);
+    
+    // Generate ECDH key pair on server
+    const { publicKeyB64, privateKeyB64 } = generateECDHKeyPair();
+    
+    // Encrypt private key using the actual password (not hash, since we need deterministic encryption)
+    const encryptedPrivateKey = encryptPrivateKey(privateKeyB64, password);
+    
     const user = new User({
       username,
       passwordHash,
       displayName,
       role: role || "user",
+      ecdhPublicKey: publicKeyB64,
+      ecdhPrivateKeyEncrypted: encryptedPrivateKey,
     });
     await user.save();
 
