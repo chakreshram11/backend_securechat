@@ -83,6 +83,4 @@ router.get('/history/:otherId', auth, async (req, res) => {
   }
 });
 
-
-
 module.exports = router;

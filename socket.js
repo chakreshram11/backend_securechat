@@ -1,24 +1,18 @@
-// socket.js
 const { Server } = require("socket.io");
 const jwt = require("jsonwebtoken");
 const { JWT_SECRET } = require("./config");
-const Message = require("./models/Message");
-const User = require("./models/User");
 
 function initSocket(server) {
   const io = new Server(server, { cors: { origin: "*" } });
 
-  // Track online users + lastSeen
-  const onlineUsers = new Map(); // userId -> [socketIds]
-  const lastSeen = new Map();    // userId -> Date
-
-  // 🔐 Authenticate sockets with JWT
+  // 🔐 Authenticate sockets
   io.use((socket, next) => {
     try {
       const token = socket.handshake.auth?.token;
       if (!token) return next(new Error("Missing token"));
+
       const decoded = jwt.verify(token, JWT_SECRET);
-      socket.user = decoded; // { id, role }
+      socket.user = decoded; // attach { id, role }
       next();
     } catch (err) {
       console.error("❌ Socket auth error:", err.message);
@@ -26,141 +20,59 @@ function initSocket(server) {
     }
   });
 
+  // 📡 Socket events
   io.on("connection", (socket) => {
     if (!socket.user?.id) {
       console.error("⚠️ Connected socket has no user ID");
-      return socket.disconnect(true);
+      return socket.disconnect();
     }
 
-    const userId = socket.user.id;
-    console.log(`🔌 User connected: ${userId}`);
-    socket.join(userId.toString());
+    console.log(`🔌 User connected: ${socket.user.id}`);
+    socket.join(socket.user.id.toString()); // ✅ private room
 
-    // ✅ Add user to online list
-    if (!onlineUsers.has(userId)) onlineUsers.set(userId, []);
-    onlineUsers.get(userId).push(socket.id);
-
-    // ✅ Clear last seen
-    lastSeen.delete(userId);
-
-    // Broadcast updated list
-    io.emit("onlineUsers", {
-      online: Array.from(onlineUsers.keys()),
-      lastSeen: Object.fromEntries(lastSeen),
+    // 👥 Groups
+    socket.on("joinGroup", (groupId) => {
+      if (groupId) {
+        socket.join("group:" + groupId);
+        console.log(`👥 User ${socket.user.id} joined group ${groupId}`);
+      }
     });
 
-    /* ---------------- MESSAGING ---------------- */
-    socket.on("sendMessage", async (msg) => {
-      if (!msg?.ciphertext) return;
+    socket.on("leaveGroup", (groupId) => {
+      if (groupId) {
+        socket.leave("group:" + groupId);
+        console.log(`👤 User ${socket.user.id} left group ${groupId}`);
+      }
+    });
 
-      console.log("📥 Incoming ciphertext:", {
-        len: msg.ciphertext.length,
-        preview: msg.ciphertext.slice(0, 40),
-      });
+    // 💬 Messaging
+    socket.on("sendMessage", (msg) => {
+      if (!msg) return;
 
       const target = msg.receiverId
-        ? msg.receiverId.toString()
+        ? msg.receiverId
         : msg.groupId
         ? "group:" + msg.groupId
         : null;
 
-      if (!target) return;
-
-      try {
-        if (msg.receiverId) {
-          const receiver = await User.findById(msg.receiverId).select("ecdhPublicKey");
-          if (!receiver?.ecdhPublicKey) {
-            return socket.emit("errorSending", {
-              reason: "recipient_missing_key",
-              receiverId: msg.receiverId,
-              message: "Recipient has not uploaded an encryption key.",
-            });
-          }
-        }
-
-        // 🔍 Before saving to DB
-        console.log("📦 Saving ciphertext:", {
-          len: msg.ciphertext?.length,
-          preview: msg.ciphertext?.slice(0, 50),
-        });
-
-        const m = new Message({
-          senderId: userId,
-          receiverId: msg.receiverId || null,
-          groupId: msg.groupId || null,
-          ciphertext: msg.ciphertext,
-          type: msg.type || "text",
-          meta: msg.meta || {},
-          read: false,
-        });
-        await m.save();
-
-        const payload = {
-          id: m._id,
-          senderId: m.senderId,
-          receiverId: m.receiverId,
-          groupId: m.groupId,
-          ciphertext: m.ciphertext,
-          type: m.type,
-          meta: m.meta,
-          createdAt: m.createdAt,
-          read: m.read,
-        };
-
-        console.log("📤 Outgoing ciphertext:", {
-          len: payload.ciphertext.length,
-          preview: payload.ciphertext.slice(0, 40),
-        });
-
-        io.to(target).emit("message", payload);
-        console.log(`📩 ${userId} → ${target} | type=${m.type}`);
-      } catch (err) {
-        console.error("❌ Failed to save/send message:", err.message);
-      }
-    });
-
-    /* ---------------- READ RECEIPTS ---------------- */
-    socket.on("markRead", async ({ otherId, groupId }) => {
-      try {
-        if (groupId) {
-          await Message.updateMany(
-            { groupId, read: { $ne: true }, receiverId: null },
-            { $set: { read: true } }
-          );
-          io.to("group:" + groupId).emit("messagesRead", {
-            readerId: userId,
-            groupId,
-          });
-        } else if (otherId) {
-          await Message.updateMany(
-            { senderId: otherId, receiverId: userId, read: { $ne: true } },
-            { $set: { read: true } }
-          );
-          io.to(otherId).emit("messagesRead", { readerId: userId });
-        }
-      } catch (err) {
-        console.error("❌ Failed to mark as read:", err.message);
-      }
-    });
-
-    /* ---------------- DISCONNECT ---------------- */
-    socket.on("disconnect", () => {
-      console.log(`❌ User disconnected: ${userId}`);
-
-      if (onlineUsers.has(userId)) {
-        const sockets = onlineUsers.get(userId).filter((id) => id !== socket.id);
-        if (sockets.length === 0) {
-          onlineUsers.delete(userId);
-          lastSeen.set(userId, new Date().toISOString());
-        } else {
-          onlineUsers.set(userId, sockets);
-        }
+      if (!target) {
+        console.warn("⚠️ Message missing target (receiverId/groupId).");
+        return;
       }
 
-      io.emit("onlineUsers", {
-        online: Array.from(onlineUsers.keys()),
-        lastSeen: Object.fromEntries(lastSeen),
+      io.to(target).emit("message", {
+        senderId: socket.user.id,
+        ciphertext: msg.ciphertext,
+        type: msg.type || "text",
+        meta: msg.meta || {},
+        createdAt: new Date()
       });
+
+      console.log(`📩 Message from ${socket.user.id} → ${target}`);
+    });
+
+    socket.on("disconnect", () => {
+      console.log(`❌ User disconnected: ${socket.user.id}`);
     });
   });
 
