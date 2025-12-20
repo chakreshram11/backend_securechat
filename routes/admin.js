@@ -138,37 +138,101 @@ router.get("/groups", auth, isAdmin, async (req, res) => {
 });
 
 router.post("/groups", auth, isAdmin, async (req, res) => {
-  const { name, members } = req.body;
-  const group = new Group({ name, members });
-  await group.save();
+  try {
+    const { name, members } = req.body;
+    const group = new Group({ name, members });
+    await group.save();
 
-  const io = req.app.get("io");
-  io.emit("groupAdded", { id: group._id });
+    const io = req.app.get("io");
+    if (io) {
+      io.emit("groupAdded", { id: group._id });
+    }
 
-  res.json(group);
+    res.json(group);
+  } catch (err) {
+    console.error("❌ Admin create group error:", err);
+    res.status(500).json({ error: "Failed to create group" });
+  }
 });
 
 router.put("/groups/:id", auth, isAdmin, async (req, res) => {
-  const { name, members } = req.body;
-  const group = await Group.findByIdAndUpdate(
-    req.params.id,
-    { name, members },
-    { new: true }
-  ).populate("members", "username displayName role");
+  try {
+    const { name, members } = req.body;
+    
+    // Validate members array - ensure all are valid ObjectIds
+    if (members && Array.isArray(members)) {
+      const mongoose = require("mongoose");
+      const validMembers = members.filter(m => mongoose.Types.ObjectId.isValid(m));
+      if (validMembers.length !== members.length) {
+        console.warn("⚠️ Some invalid member IDs were filtered out");
+      }
+      
+      const updateData = { name };
+      if (members.length > 0) {
+        updateData.members = validMembers;
+      } else {
+        updateData.members = []; // Allow empty groups
+      }
+      
+      const group = await Group.findByIdAndUpdate(
+        req.params.id,
+        updateData,
+        { new: true }
+      ).populate("members", "username displayName role");
 
-  const io = req.app.get("io");
-  io.emit("groupUpdated", { id: group._id });
+      if (!group) {
+        return res.status(404).json({ error: "Group not found" });
+      }
 
-  res.json(group);
+      const io = req.app.get("io");
+      if (io) {
+        io.emit("groupUpdated", { id: group._id });
+      }
+
+      res.json(group);
+    } else {
+      // If members is not provided or not an array, just update name
+      const group = await Group.findByIdAndUpdate(
+        req.params.id,
+        { name },
+        { new: true }
+      ).populate("members", "username displayName role");
+
+      if (!group) {
+        return res.status(404).json({ error: "Group not found" });
+      }
+
+      const io = req.app.get("io");
+      if (io) {
+        io.emit("groupUpdated", { id: group._id });
+      }
+
+      res.json(group);
+    }
+  } catch (err) {
+    console.error("❌ Admin update group error:", err);
+    res.status(500).json({ error: "Failed to update group" });
+  }
 });
 
 router.delete("/groups/:id", auth, isAdmin, async (req, res) => {
-  await Group.findByIdAndDelete(req.params.id);
+  try {
+    const deletedGroup = await Group.findByIdAndDelete(req.params.id);
+    
+    if (!deletedGroup) {
+      return res.status(404).json({ error: "Group not found" });
+    }
 
-  const io = req.app.get("io");
-  io.emit("groupDeleted", { id: req.params.id });
+    const io = req.app.get("io");
+    if (io) {
+      io.emit("groupDeleted", { id: req.params.id });
+    }
 
-  res.json({ ok: true });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("❌ Admin delete group error:", err);
+    res.status(500).json({ error: "Failed to delete group" });
+  }
 });
 
 module.exports = router;

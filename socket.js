@@ -36,6 +36,23 @@ function initSocket(server) {
     console.log(`🔌 User connected: ${userId}`);
     socket.join(userId.toString());
 
+    // ✅ Join group rooms when user requests
+    socket.on("joinGroup", (groupId) => {
+      if (groupId) {
+        const roomName = "group:" + groupId;
+        socket.join(roomName);
+        console.log(`👥 User ${userId} joined group room: ${roomName}`);
+      }
+    });
+
+    socket.on("leaveGroup", (groupId) => {
+      if (groupId) {
+        const roomName = "group:" + groupId;
+        socket.leave(roomName);
+        console.log(`👥 User ${userId} left group room: ${roomName}`);
+      }
+    });
+
     // ✅ Add user to online list
     if (!onlineUsers.has(userId)) onlineUsers.set(userId, []);
     onlineUsers.get(userId).push(socket.id);
@@ -95,6 +112,14 @@ function initSocket(server) {
         });
         await m.save();
 
+        // Ensure meta is properly saved and includes senderPublicKey
+        console.log("💾 Message saved with meta:", {
+          hasMeta: !!m.meta,
+          hasSenderPublicKey: !!m.meta?.senderPublicKey,
+          senderPublicKeyLength: m.meta?.senderPublicKey?.length,
+          metaKeys: m.meta ? Object.keys(m.meta) : []
+        });
+
         const payload = {
           id: m._id,
           senderId: m.senderId,
@@ -102,10 +127,17 @@ function initSocket(server) {
           groupId: m.groupId,
           ciphertext: m.ciphertext,
           type: m.type,
-          meta: m.meta,
+          meta: m.meta || {}, // Ensure meta is always an object
           createdAt: m.createdAt,
           read: m.read,
         };
+        
+        // Log what we're sending
+        console.log("📤 Broadcasting message with meta:", {
+          hasMeta: !!payload.meta,
+          hasSenderPublicKey: !!payload.meta?.senderPublicKey,
+          senderPublicKeyLength: payload.meta?.senderPublicKey?.length
+        });
 
         console.log("📤 Outgoing ciphertext:", {
           len: payload.ciphertext.length,
