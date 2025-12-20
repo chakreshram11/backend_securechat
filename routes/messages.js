@@ -76,9 +76,55 @@ router.get('/history/:otherId', auth, async (req, res) => {
       ]
     }).sort({ createdAt: 1 }).limit(100);
 
-    res.json(messages.map(m => m.toObject())); // ✅ safe return
+    const messagesData = messages.map(m => {
+      const msgObj = m.toObject();
+      // Ensure meta is always an object
+      if (!msgObj.meta || typeof msgObj.meta !== 'object') {
+        msgObj.meta = {};
+      }
+      // Log meta for debugging - show ALL messages
+      console.log("📥 History message:", {
+        id: msgObj._id,
+        hasMeta: !!msgObj.meta,
+        metaKeys: Object.keys(msgObj.meta || {}),
+        hasSenderPublicKey: !!msgObj.meta.senderPublicKey,
+        senderPublicKeyLength: msgObj.meta.senderPublicKey?.length,
+        senderPublicKeyPreview: msgObj.meta.senderPublicKey?.substring(0, 50),
+        ciphertextLength: msgObj.ciphertext?.length
+      });
+      return msgObj;
+    });
+
+    console.log(`📤 Sending ${messagesData.length} messages in history response`);
+
+    res.json(messagesData);
   } catch (err) {
     console.error("❌ Error fetching history:", err.message);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// 📌 Get group chat history
+router.get('/group/:groupId', auth, async (req, res) => {
+  try {
+    const groupId = req.params.groupId;
+
+    const messages = await Message.find({
+      groupId: groupId
+    }).sort({ createdAt: 1 }).limit(100).populate('senderId', 'username displayName');
+
+    const messagesData = messages.map(m => {
+      const msgObj = m.toObject();
+      // Ensure meta is always an object
+      if (!msgObj.meta || typeof msgObj.meta !== 'object') {
+        msgObj.meta = {};
+      }
+      return msgObj;
+    });
+
+    res.json(messagesData);
+  } catch (err) {
+    console.error("❌ Error fetching group history:", err.message);
     res.status(500).json({ error: "Server error" });
   }
 });

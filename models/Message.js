@@ -6,8 +6,16 @@ const MessageSchema = new mongoose.Schema({
   groupId: { type: String, default: null },
   type: { type: String, enum: ['text','file'], default: 'text' },
   ciphertext: { type: String, required: true }, // base64 encoded AES-GCM ciphertext + iv concatenated
-  meta: { type: Object }, // e.g., filename, mimetype
+  meta: { 
+    type: mongoose.Schema.Types.Mixed,
+    default: {}
+  }, // e.g., filename, mimetype, senderPublicKey
+  read: { type: Boolean, default: false },
   createdAt: { type: Date, default: Date.now }
+}, {
+  // Ensure virtuals and nested objects are included when converting to JSON
+  toJSON: { virtuals: true },
+  toObject: { virtuals: true }
 });
 
 module.exports = mongoose.model('Message', MessageSchema);

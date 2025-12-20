@@ -5,6 +5,7 @@ const User = require("../models/User");
 const { JWT_SECRET } = require("../config");
 const auth = require("../middleware/auth");
 const isAdmin = require("../middleware/isAdmin");
+const { decryptPrivateKey } = require("../utils/crypto");
 
 const router = express.Router();
 
@@ -47,29 +48,38 @@ router.post("/register", auth, isAdmin, async (req, res) => {
 /* -------- User Login -------- */
 router.post("/login", async (req, res) => {
   try {
-    const { username, password, ecdhPublicKey } = req.body;
+    const { username, password, ecdhPublicKey, needPrivateKey } = req.body;
+
+    console.log(`🔐 Login attempt for user: ${username}, needPrivateKey: ${needPrivateKey}`);
 
     const user = await User.findOne({ username });
-    if (!user) return res.status(400).json({ error: "Invalid credentials" });
+    if (!user) {
+      console.log(`❌ User not found: ${username}`);
+      return res.status(400).json({ error: "Invalid credentials" });
+    }
 
     const ok = await bcrypt.compare(password, user.passwordHash);
-    if (!ok) return res.status(400).json({ error: "Invalid credentials" });
+    if (!ok) {
+      console.log(`❌ Password mismatch for user: ${username}`);
+      return res.status(400).json({ error: "Invalid credentials" });
+    }
 
-// If client provided a public key and it differs from stored, update it.
-if (ecdhPublicKey) {
-  if (!user.ecdhPublicKey || user.ecdhPublicKey !== ecdhPublicKey) {
-    user.ecdhPublicKey = ecdhPublicKey;
-    await user.save();
-    console.log(`🔑 Stored/updated public key for ${user.username}`);
-  }
-}
+    console.log(`✅ Password verified for user: ${username}`);
 
+    // If client provided a public key and it differs from stored, update it.
+    if (ecdhPublicKey) {
+      if (!user.ecdhPublicKey || user.ecdhPublicKey !== ecdhPublicKey) {
+        user.ecdhPublicKey = ecdhPublicKey;
+        await user.save();
+        console.log(`🔑 Stored/updated public key for ${user.username}`);
+      }
+    }
 
     const token = jwt.sign({ id: user._id, role: user.role }, JWT_SECRET, {
       expiresIn: "7d",
     });
 
-    res.json({
+    const response = {
       token,
       user: {
         id: user._id,
@@ -78,10 +88,31 @@ if (ecdhPublicKey) {
         role: user.role,
         ecdhPublicKey: user.ecdhPublicKey,
       },
-    });
+    };
+
+    // If user needs private key and server has it stored, decrypt and return it
+    if (needPrivateKey && user.ecdhPrivateKeyEncrypted) {
+      try {
+        // Use the actual password (from request) to decrypt, not the password hash
+        const decryptedPrivateKey = decryptPrivateKey(
+          user.ecdhPrivateKeyEncrypted,
+          password
+        );
+        response.ecdhPrivateKey = decryptedPrivateKey;
+        console.log(`🔓 Decrypted and returned private key for ${user.username}`);
+      } catch (err) {
+        console.error("❌ Failed to decrypt private key:", err);
+        console.error("Decryption error details:", err.message);
+        // Continue without private key - user can still login
+      }
+    }
+
+    console.log(`✅ Login successful for user: ${username}`);
+    res.json(response);
   } catch (err) {
     console.error("❌ Login error:", err);
-    res.status(500).json({ error: "Server error" });
+    console.error("Error stack:", err.stack);
+    res.status(500).json({ error: err.message || "Server error" });
   }
 });
 
