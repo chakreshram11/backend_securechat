@@ -23,6 +23,13 @@ app.get('/api/health', (req, res) => {
   res.json({ ok: true, message: "Backend running 🚀" });
 });
 
+// Debug route to test basic connectivity (no auth required)
+app.options('/api/auth/login', cors()); // Handle preflight
+app.post('/api/debug/ping', (req, res) => {
+  console.log("🔍 Debug ping received from:", req.headers.origin);
+  res.json({ ok: true, timestamp: new Date().toISOString(), message: "Pong!" });
+});
+
 // API routes
 app.use('/api/admin', adminRoutes);
 app.use('/api/auth', authRoutes);
@@ -44,8 +51,13 @@ async function start() {
     await mongoose.connect(MONGO_URI, {
       useNewUrlParser: true,
       useUnifiedTopology: true,
+      maxPoolSize: 10, // Max number of connections in pool
+      minPoolSize: 2,  // Min number of connections in pool
+      maxIdleTimeMS: 45000,
+      serverSelectionTimeoutMS: 5000,
+      socketTimeoutMS: 45000,
     });
-    console.log("✅ MongoDB connected");
+    console.log("✅ MongoDB connected with connection pooling enabled");
 
     server.listen(PORT, '0.0.0.0', () => {
       console.log(`✅ Server started on http://0.0.0.0:${PORT}`);

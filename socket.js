@@ -11,6 +11,8 @@ function initSocket(server) {
   // Track online users + lastSeen
   const onlineUsers = new Map(); // userId -> [socketIds]
   const lastSeen = new Map();    // userId -> Date
+  // Track per-user capabilities reported by clients (e.g., hasPrivateKey)
+  const userCapabilities = new Map(); // userId -> { hasPrivateKey: boolean, hasWebCrypto: boolean }
 
   //  Authenticate sockets with JWT
   io.use((socket, next) => {
@@ -49,13 +51,47 @@ function initSocket(server) {
       lastSeen: Object.fromEntries(lastSeen),
     });
 
+    // Listen for capability reports from client
+    socket.on('capabilities', (caps) => {
+      try {
+        userCapabilities.set(userId, { hasPrivateKey: !!caps.hasPrivateKey, hasWebCrypto: !!caps.hasWebCrypto });
+        console.log(`⚙️ Capabilities updated for ${userId}:`, userCapabilities.get(userId));
+      } catch (err) {
+        console.warn('⚠️ Failed to set capabilities:', err.message);
+      }
+    });
+
+    // Optionally let client ask for current capabilities of another user
+    socket.on('getUserCapabilities', (targetUserId, cb) => {
+      cb && cb(userCapabilities.get(String(targetUserId)) || null);
+    });
+
     /* ---------------- MESSAGING ---------------- */
     socket.on("sendMessage", async (msg) => {
-      if (!msg?.ciphertext) return;
+      if (!msg?.ciphertext) {
+        console.error("❌ REJECTED: No ciphertext provided");
+        return socket.emit("errorSending", { reason: "no_ciphertext" });
+      }
 
-      console.log(" Incoming ciphertext:", {
+      // Validate ciphertext length - must be at least 12 (IV) + 1 (data) + 16 (auth tag) = 29 bytes minimum
+      if (msg.ciphertext.length < 29) {
+        // Treat short ciphertexts as plaintext (unencrypted) for backward compatibility
+        if (!msg.meta || typeof msg.meta !== 'object') msg.meta = {};
+        if (msg.meta.unencrypted !== true) {
+          console.warn("⚠️ Short ciphertext received over socket - coercing to unencrypted", {
+            provided: msg.ciphertext.length,
+            minimum: 29,
+            preview: msg.ciphertext.substring(0, 50)
+          });
+          msg.meta.unencrypted = true;
+        }
+      }
+
+      console.log("✅ Ciphertext validated (or coerced to unencrypted):", {
         len: msg.ciphertext.length,
         preview: msg.ciphertext.slice(0, 40),
+        metaKeys: Object.keys(msg.meta || {}),
+        isUnencrypted: msg.meta?.unencrypted === true
       });
 
       const target = msg.receiverId
@@ -64,12 +100,15 @@ function initSocket(server) {
         ? "group:" + msg.groupId
         : null;
 
-      if (!target) return;
+      if (!target) {
+        console.error("❌ REJECTED: No target (no receiverId or groupId)");
+        return socket.emit("errorSending", { reason: "no_target" });
+      }
 
       try {
         if (msg.receiverId) {
           const receiver = await User.findById(msg.receiverId).select("ecdhPublicKey");
-          if (!receiver?.ecdhPublicKey) {
+          if (!receiver?.ecdhPublicKey && msg.meta?.unencrypted !== true) {
             return socket.emit("errorSending", {
               reason: "recipient_missing_key",
               receiverId: msg.receiverId,
@@ -79,6 +118,23 @@ function initSocket(server) {
         }
 
         //  Before saving to DB
+        // If recipient is online but reports they do NOT have a local private key, reject encrypted sends and request sender to resend unencrypted
+        if (msg.receiverId && msg.meta?.unencrypted !== true) {
+          const receiverCaps = userCapabilities.get(String(msg.receiverId));
+          const isRecipientOnline = onlineUsers.has(String(msg.receiverId));
+          if (isRecipientOnline && receiverCaps && receiverCaps.hasPrivateKey === false) {
+            console.warn('❌ REJECTED: Recipient is online but cannot decrypt encrypted messages; asking sender to resend unencrypted', {
+              receiverId: msg.receiverId,
+              receiverCaps,
+            });
+            return socket.emit('errorSending', {
+              reason: 'recipient_no_private_key',
+              receiverId: msg.receiverId,
+              message: 'Recipient is online but cannot decrypt encrypted messages; please resend without encryption.'
+            });
+          }
+        }
+
         console.log(" Saving ciphertext:", {
           len: msg.ciphertext?.length,
           preview: msg.ciphertext?.slice(0, 50),
@@ -139,6 +195,7 @@ function initSocket(server) {
         console.log(` ${userId}  ${target} | type=${m.type}`);
       } catch (err) {
         console.error(" Failed to save/send message:", err.message);
+        socket.emit("errorSending", { reason: "save_error", message: err.message });
       }
     });
 
@@ -175,6 +232,8 @@ function initSocket(server) {
         if (sockets.length === 0) {
           onlineUsers.delete(userId);
           lastSeen.set(userId, new Date().toISOString());
+          // Remove capabilities when user fully disconnects
+          userCapabilities.delete(userId);
         } else {
           onlineUsers.set(userId, sockets);
         }

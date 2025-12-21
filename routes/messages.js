@@ -18,7 +18,28 @@ router.post('/', auth, [
   if (!errs.isEmpty()) return res.status(400).json({ errors: errs.array() });
 
   try {
-    const { receiverId, groupId, ciphertext, type, meta } = req.body;
+    const { receiverId, groupId, ciphertext, type } = req.body;
+    let meta = req.body.meta || {};
+
+    // Accept both encrypted and unencrypted messages
+    // - Encrypted: at least 29 bytes (12 IV + 1 data + 16 auth tag)
+    // - Unencrypted (plaintext): any length if meta.unencrypted is true
+    
+    if (!ciphertext || ciphertext.length === 0) {
+      return res.status(400).json({ error: "Message cannot be empty" });
+    }
+
+    // If message is marked as unencrypted, allow any non-empty length
+    // If ciphertext is short (<29) but not explicitly marked, treat it as plaintext (coerce)
+    if (ciphertext.length < 29 && meta?.unencrypted !== true) {
+      console.warn("⚠️ Short ciphertext received - treating as unencrypted and coercing meta.unencrypted=true", {
+        provided: ciphertext?.length,
+        minimum: 29,
+        preview: ciphertext?.substring(0, 50)
+      });
+      // Coerce to unencrypted to preserve backward compatibility with older clients
+      meta = { ...meta, unencrypted: true };
+    }
 
     const m = new Message({
       senderId: req.user.id, // ✅ always use id from JWT
@@ -28,6 +49,15 @@ router.post('/', auth, [
       type,
       meta: meta || {}
     });
+    
+    console.log("💾 Saving message:", {
+      ciphertextLength: ciphertext.length,
+      type,
+      isUnencrypted: meta?.unencrypted,
+      hasMeta: !!meta,
+      metaKeys: Object.keys(meta || {})
+    });
+    
     await m.save();
 
     // 📡 emit via socket
@@ -109,8 +139,17 @@ router.get('/group/:groupId', auth, async (req, res) => {
   try {
     const groupId = req.params.groupId;
 
+    const userId = req.user.id;
+
+    // Only return messages that are either public to the group (receiverId == null),
+    // or explicitly targeted to the requesting user, or messages sent by the requester.
     const messages = await Message.find({
-      groupId: groupId
+      groupId: groupId,
+      $or: [
+        { receiverId: null },
+        { receiverId: userId },
+        { senderId: userId }
+      ]
     }).sort({ createdAt: 1 }).limit(100).populate('senderId', 'username displayName');
 
     const messagesData = messages.map(m => {
