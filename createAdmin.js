@@ -1,7 +1,6 @@
 require("dotenv").config();
 const mongoose = require("mongoose");
 const bcrypt = require("bcrypt");
-const crypto = require("crypto");
 const User = require("./models/User");
 const { encryptPrivateKey } = require("./utils/crypto");
 const { MONGO_URI } = require("./config");
@@ -11,8 +10,8 @@ async function createAdmin() {
     await mongoose.connect(MONGO_URI);
     console.log("✅ MongoDB connected");
 
-    const username = "server";
-    const password = "server"; // change later
+    const username = "chakresh";
+    const password = "chakresh"; // change later
     const displayName = "Administrator";
 
     // ❌ Prevent duplicate admin
@@ -22,24 +21,22 @@ async function createAdmin() {
       process.exit(0);
     }
 
-const { generateKeyPairSync } = require("crypto");
+    // 🔐 Generate admin ECDH key pair (PKCS8 compatible)
+    const { generateKeyPairSync } = require("crypto");
+    const { publicKey, privateKey } = generateKeyPairSync("ec", {
+      namedCurve: "prime256v1",
+      publicKeyEncoding: {
+        type: "spki",
+        format: "der",
+      },
+      privateKeyEncoding: {
+        type: "pkcs8",
+        format: "der",
+      },
+    });
 
-// 🔐 Generate admin ECDH key pair (PKCS8 compatible)
-const { publicKey, privateKey } = generateKeyPairSync("ec", {
-  namedCurve: "prime256v1",
-  publicKeyEncoding: {
-    type: "spki",
-    format: "der",
-  },
-  privateKeyEncoding: {
-    type: "pkcs8",
-    format: "der",
-  },
-});
-
-const ecdhPublicKey = publicKey.toString("base64");
-const ecdhPrivateKey = privateKey.toString("base64");
-
+    const ecdhPublicKey = publicKey.toString("base64");
+    const ecdhPrivateKey = privateKey.toString("base64");
 
     const passwordHash = await bcrypt.hash(password, 12);
 
@@ -49,7 +46,10 @@ const ecdhPrivateKey = privateKey.toString("base64");
       displayName,
       role: "admin",
       ecdhPublicKey,
-      ecdhPrivateKeyEnc: encryptPrivateKey(ecdhPrivateKey),
+      ecdhPrivateKeyEncrypted: encryptPrivateKey(
+        ecdhPrivateKey,
+        process.env.KEY_ENCRYPT_SECRET
+      ),
       canCreateGroups: true,
       canChat: true,
       canShareMedia: true,
