@@ -5,7 +5,7 @@ const User = require("../models/User");
 const { JWT_SECRET } = require("../config");
 const auth = require("../middleware/auth");
 const isAdmin = require("../middleware/isAdmin");
-const { decryptPrivateKey } = require("../utils/crypto");
+const { decryptPrivateKey, generateECDHKeyPair } = require("../utils/crypto");
 
 const router = express.Router();
 
@@ -141,6 +141,36 @@ router.post('/uploadKey', auth, async (req, res) => {
   } catch (err) {
     console.error("❌ uploadKey error:", err);
     res.status(500).json({ error: "Server error" });
+  }
+});
+
+// POST /api/auth/generateKeys - Generate keys on backend when Web Crypto is not available
+router.post('/generateKeys', auth, async (req, res) => {
+  try {
+    console.log(`🔑 Generating keys on backend for user: ${req.user.id}`);
+
+    // Generate ECDH key pair on the backend
+    const { publicKeyB64, privateKeyB64 } = generateECDHKeyPair();
+
+    // Store the public key in the user's record
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(404).json({ error: "User not found" });
+
+    user.ecdhPublicKey = publicKeyB64;
+    await user.save();
+
+    console.log(`✅ Generated keys on backend for user: ${req.user.id}`);
+
+    res.json({
+      ok: true,
+      publicKey: publicKeyB64,
+      privateKey: privateKeyB64,
+      message: "Keys generated on backend successfully"
+    });
+  } catch (err) {
+    console.error("❌ generateKeys error:", err);
+    console.error("Error stack:", err.stack);
+    res.status(500).json({ error: "Failed to generate keys on backend" });
   }
 });
 

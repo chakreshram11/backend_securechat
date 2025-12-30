@@ -1,34 +1,63 @@
-// Basic MinIO wrapper. If minio isn't available falls back to local path serving.
-const Minio = require('minio');
+// MongoDB file storage
 const fs = require('fs');
 const path = require('path');
-const { MINIO } = require('../config');
+const File = require('../models/File');
 
-const minioClient = new Minio.Client({
-  endPoint: MINIO.endPoint,
-  port: MINIO.port,
-  useSSL: MINIO.useSSL,
-  accessKey: MINIO.accessKey,
-  secretKey: MINIO.secretKey
-});
-
-const BUCKET = 'chat-files';
-
-async function ensureBucket() {
+async function putFile(localPath, name, contentType, userId) {
   try {
-    const exists = await minioClient.bucketExists(BUCKET);
-    if (!exists) await minioClient.makeBucket(BUCKET);
-  } catch (err) { console.error('minio bucket error', err); }
+    // Read file data
+    const fileData = fs.readFileSync(localPath);
+    const fileStats = fs.statSync(localPath);
+
+    // Determine if it's an image
+    const isImage = /\.(jpg|jpeg|png|gif|webp)$/i.test(name);
+
+    // Create file record in MongoDB
+    const file = new File({
+      filename: name,
+      originalname: name,
+      mimetype: contentType || 'application/octet-stream',
+      size: fileStats.size,
+      data: fileData,
+      uploadedBy: userId,
+      isImage: isImage
+    });
+
+    await file.save();
+
+    // Clean up temporary file
+    fs.unlink(localPath, () => {});
+
+    // Return the file ID for URL generation
+    return file._id;
+  } catch (err) {
+    console.error('❌ MongoDB file storage error:', err);
+    // Clean up temporary file even if save fails
+    fs.unlink(localPath, () => {});
+    throw new Error('File storage failed: ' + err.message);
+  }
 }
 
-ensureBucket();
-
-async function putFile(localPath, name, contentType) {
-  await minioClient.fPutObject(BUCKET, name, localPath, {
-    'Content-Type': contentType || 'application/octet-stream'
-  });
-  fs.unlink(localPath, ()=>{});
-  return `/files/${name}`; // your server should serve as /files/:name via proxy to minio or presigned URL
+async function getFile(fileId) {
+  try {
+    const file = await File.findById(fileId);
+    if (!file) {
+      throw new Error('File not found');
+    }
+    return file;
+  } catch (err) {
+    console.error('❌ MongoDB file retrieval error:', err);
+    throw new Error('File retrieval failed: ' + err.message);
+  }
 }
 
-module.exports = { putFile };
+async function deleteFile(fileId) {
+  try {
+    await File.findByIdAndDelete(fileId);
+  } catch (err) {
+    console.error('❌ MongoDB file deletion error:', err);
+    throw new Error('File deletion failed: ' + err.message);
+  }
+}
+
+module.exports = { putFile, getFile, deleteFile };

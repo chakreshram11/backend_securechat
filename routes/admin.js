@@ -41,7 +41,8 @@ router.post("/users", auth, isAdmin, async (req, res) => {
 
     // 🔔 Emit socket event
     const io = req.app.get("io");
-    io.emit("userAdded", { id: user._id, username: user.username });
+    io.emit("user:new", user);
+    io.emit("userAdded", user);
 
     res.json(user);
   } catch (err) {
@@ -63,10 +64,16 @@ router.put("/users/:id", auth, isAdmin, async (req, res) => {
 });
 
 router.delete("/users/:id", auth, isAdmin, async (req, res) => {
-  await User.findByIdAndDelete(req.params.id);
+  // Prevent administrators from deleting their own account
+  if (req.params.id === req.user.id) {
+    return res.status(403).json({ error: "You cannot delete your own account" });
+  }
+
+  const deletedUser = await User.findByIdAndDelete(req.params.id);
 
   const io = req.app.get("io");
-  io.emit("userDeleted", { id: req.params.id });
+  io.emit("user:deleted", deletedUser);
+  io.emit("userDeleted", deletedUser);
 
   res.json({ ok: true });
 });

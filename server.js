@@ -9,12 +9,21 @@ const authRoutes = require('./routes/auth');
 const usersRoutes = require('./routes/users');
 const messagesRoutes = require('./routes/messages');
 const adminRoutes = require('./routes/admin');
+const filesRoutes = require('./routes/files');
 const { initSocket } = require('./socket');
+
+// Load File model to ensure it's registered with Mongoose
+require('./models/File');
 
 const app = express();
 
 // Middlewares
-app.use(cors({ origin: "*" }));
+app.use(cors({
+  origin: "*",
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+  credentials: true
+}));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
@@ -23,8 +32,8 @@ app.get('/api/health', (req, res) => {
   res.json({ ok: true, message: "Backend running 🚀" });
 });
 
-// Debug route to test basic connectivity (no auth required)
-app.options('/api/auth/login', cors()); // Handle preflight
+// Handle OPTIONS requests for all routes (CORS preflight)
+app.options('*', cors());
 app.post('/api/debug/ping', (req, res) => {
   console.log("🔍 Debug ping received from:", req.headers.origin);
   res.json({ ok: true, timestamp: new Date().toISOString(), message: "Pong!" });
@@ -35,6 +44,7 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/users', usersRoutes);
 app.use('/api/messages', messagesRoutes);
+app.use('/api/files', filesRoutes);
 
 // Static files (for uploaded media)
 app.use('/files', express.static('files'));
@@ -61,7 +71,7 @@ async function start() {
 
     server.listen(PORT, '0.0.0.0', () => {
       console.log(`✅ Server started on http://0.0.0.0:${PORT}`);
-      console.log(`   Accessible at http://localhost:${PORT} or http://172.24.79.127:${PORT}`);
+      console.log(`   Accessible at http://localhost:${PORT}`);
     });
   } catch (err) {
     console.error("❌ Failed to connect to MongoDB", err.message);

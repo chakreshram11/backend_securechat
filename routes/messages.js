@@ -84,9 +84,19 @@ router.post('/', auth, [
 router.post('/upload', auth, upload.single('file'), async (req, res) => {
   try {
     const { originalname, path, mimetype } = req.file;
-    const objectName = `uploads/${uuidv4()}-${originalname}`;
-    const url = await storage.putFile(path, objectName, mimetype);
-    res.json({ ok: true, url, objectName });
+
+    // Upload file to MongoDB
+    const fileId = await storage.putFile(
+      path,
+      originalname,
+      mimetype,
+      req.user.id
+    );
+
+    // Generate file URL
+    const url = `/api/files/${fileId}`;
+
+    res.json({ ok: true, url, fileId });
   } catch (err) {
     console.error("❌ File upload failed:", err.message);
     res.status(500).json({ error: 'upload failed' });
