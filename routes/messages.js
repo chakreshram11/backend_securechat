@@ -12,7 +12,7 @@ const router = express.Router();
 // 📌 Send message
 router.post('/', auth, [
   body('ciphertext').isString(),
-  body('type').isIn(['text','file']),
+  body('type').isIn(['text', 'file']),
 ], async (req, res) => {
   const errs = validationResult(req);
   if (!errs.isEmpty()) return res.status(400).json({ errors: errs.array() });
@@ -24,7 +24,7 @@ router.post('/', auth, [
     // Accept both encrypted and unencrypted messages
     // - Encrypted: at least 29 bytes (12 IV + 1 data + 16 auth tag)
     // - Unencrypted (plaintext): any length if meta.unencrypted is true
-    
+
     if (!ciphertext || ciphertext.length === 0) {
       return res.status(400).json({ error: "Message cannot be empty" });
     }
@@ -49,7 +49,7 @@ router.post('/', auth, [
       type,
       meta: meta || {}
     });
-    
+
     console.log("💾 Saving message:", {
       ciphertextLength: ciphertext.length,
       type,
@@ -57,7 +57,7 @@ router.post('/', auth, [
       hasMeta: !!meta,
       metaKeys: Object.keys(meta || {})
     });
-    
+
     await m.save();
 
     // 📡 emit via socket
@@ -93,10 +93,18 @@ router.post('/upload', auth, upload.single('file'), async (req, res) => {
       req.user.id
     );
 
-    // Generate file URL
-    const url = `/api/files/${fileId}`;
+    // Generate absolute file URL based on request origin
+    // This ensures the URL works regardless of which hostname/IP the client uses
+    const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'http';
+    const host = req.headers.host || `localhost:${process.env.PORT || 5000}`;
+    const absoluteUrl = `${protocol}://${host}/api/files/${fileId}`;
 
-    res.json({ ok: true, url, fileId });
+    // Also provide relative URL for clients that prefer it
+    const relativeUrl = `/api/files/${fileId}`;
+
+    console.log(`📁 File uploaded: ${originalname} -> ${absoluteUrl}`);
+
+    res.json({ ok: true, url: absoluteUrl, relativeUrl, fileId });
   } catch (err) {
     console.error("❌ File upload failed:", err.message);
     res.status(500).json({ error: 'upload failed' });
@@ -152,13 +160,16 @@ router.get('/group/:groupId', auth, async (req, res) => {
     const userId = req.user.id;
 
     // Only return messages that are either public to the group (receiverId == null),
-    // or explicitly targeted to the requesting user, or messages sent by the requester.
+    // or explicitly targeted to the requesting user.
+    // We REMOVED { senderId: userId } to prevent the sender from fetching all copies
+    // they sent to other members (which they can't decrypt easily anyway).
+    // The sender's own copy is covered by { receiverId: userId } assuming the client
+    // sends a copy to self (which the current frontend loop does).
     const messages = await Message.find({
       groupId: groupId,
       $or: [
         { receiverId: null },
-        { receiverId: userId },
-        { senderId: userId }
+        { receiverId: userId }
       ]
     }).sort({ createdAt: 1 }).limit(100).populate('senderId', 'username displayName');
 

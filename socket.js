@@ -100,20 +100,19 @@ function initSocket(server) {
 
     /* ---------------- MESSAGING ---------------- */
     socket.on("sendMessage", async (msg) => {
+      // 1. Basic validation
       if (!msg?.ciphertext) {
         console.error("❌ REJECTED: No ciphertext provided");
         return socket.emit("errorSending", { reason: "no_ciphertext" });
       }
 
-      // Validate ciphertext length - must be at least 12 (IV) + 1 (data) + 16 (auth tag) = 29 bytes minimum
+      // Validate ciphertext length (min 29 bytes for encrypted)
       if (msg.ciphertext.length < 29) {
-        // Treat short ciphertexts as plaintext (unencrypted) for backward compatibility
         if (!msg.meta || typeof msg.meta !== 'object') msg.meta = {};
         if (msg.meta.unencrypted !== true) {
           console.warn("⚠️ Short ciphertext received over socket - coercing to unencrypted", {
             provided: msg.ciphertext.length,
-            minimum: 29,
-            preview: msg.ciphertext.substring(0, 50)
+            minimum: 29
           });
           msg.meta.unencrypted = true;
         }
@@ -121,16 +120,16 @@ function initSocket(server) {
 
       console.log("✅ Ciphertext validated (or coerced to unencrypted):", {
         len: msg.ciphertext.length,
-        preview: msg.ciphertext.slice(0, 40),
-        metaKeys: Object.keys(msg.meta || {}),
         isUnencrypted: msg.meta?.unencrypted === true
       });
 
-      const target = msg.receiverId
-        ? msg.receiverId.toString()
-        : msg.groupId
-        ? "group:" + msg.groupId
-        : null;
+      // 2. Identify Target using strict logic to avoid accidental broadcasting
+      let target = null;
+      if (msg.receiverId) {
+        target = msg.receiverId.toString();
+      } else if (msg.groupId) {
+        target = "group:" + msg.groupId;
+      }
 
       if (!target) {
         console.error("❌ REJECTED: No target (no receiverId or groupId)");
@@ -138,39 +137,55 @@ function initSocket(server) {
       }
 
       try {
+        /* ---------------- STRICT GROUP SECURITY CHECK ---------------- */
+        if (msg.groupId) {
+          const group = await Group.findById(msg.groupId);
+          if (!group) {
+            console.warn(`❌ REJECTED: Group ${msg.groupId} not found`);
+            return socket.emit("errorSending", { reason: "group_not_found" });
+          }
+
+          const senderIdStr = userId.toString();
+
+          // Verify Sender is a member of the group
+          // We use map(String) to ensure ObjectId comparison works
+          const isSenderMember = group.members.some(m => m.toString() === senderIdStr);
+
+          if (!isSenderMember) {
+            console.warn(`🛑 Blocked message from non-member ${senderIdStr} to group ${msg.groupId}`);
+            return socket.emit("errorSending", { reason: "not_a_member" });
+          }
+
+          // If looking to send to a specific receiver in the group, verify they are also a member
+          if (msg.receiverId) {
+            const receiverIdStr = msg.receiverId.toString();
+            const isReceiverMember = group.members.some(m => m.toString() === receiverIdStr);
+
+            if (!isReceiverMember) {
+              console.warn(`🛑 Blocked message to non-member ${receiverIdStr} inside group ${msg.groupId}`);
+              return socket.emit("errorSending", { reason: "recipient_not_member" });
+            }
+          }
+        }
+        /* --------------------------------------------------------- */
+
         if (msg.receiverId) {
-          const receiver = await User.findById(msg.receiverId).select("ecdhPublicKey");
-          if (!receiver?.ecdhPublicKey && msg.meta?.unencrypted !== true) {
-            return socket.emit("errorSending", {
-              reason: "recipient_missing_key",
-              receiverId: msg.receiverId,
-              message: "Recipient has not uploaded an encryption key.",
-            });
+          // Check for encryption keys if not plaintext
+          if (msg.meta?.unencrypted !== true) {
+            const receiverCaps = userCapabilities.get(String(msg.receiverId));
+            const isRecipientOnline = onlineUsers.has(String(msg.receiverId));
+
+            // If recipient is online but has no private key, we can't send encrypted
+            if (isRecipientOnline && receiverCaps && receiverCaps.hasPrivateKey === false) {
+              console.warn('❌ REJECTED: Recipient online but no private key');
+              return socket.emit('errorSending', {
+                reason: 'recipient_no_private_key',
+                receiverId: msg.receiverId,
+                message: 'Recipient is online but cannot decrypt.'
+              });
+            }
           }
         }
-
-        //  Before saving to DB
-        // If recipient is online but reports they do NOT have a local private key, reject encrypted sends and request sender to resend unencrypted
-        if (msg.receiverId && msg.meta?.unencrypted !== true) {
-          const receiverCaps = userCapabilities.get(String(msg.receiverId));
-          const isRecipientOnline = onlineUsers.has(String(msg.receiverId));
-          if (isRecipientOnline && receiverCaps && receiverCaps.hasPrivateKey === false) {
-            console.warn('❌ REJECTED: Recipient is online but cannot decrypt encrypted messages; asking sender to resend unencrypted', {
-              receiverId: msg.receiverId,
-              receiverCaps,
-            });
-            return socket.emit('errorSending', {
-              reason: 'recipient_no_private_key',
-              receiverId: msg.receiverId,
-              message: 'Recipient is online but cannot decrypt encrypted messages; please resend without encryption.'
-            });
-          }
-        }
-
-        console.log(" Saving ciphertext:", {
-          len: msg.ciphertext?.length,
-          preview: msg.ciphertext?.slice(0, 50),
-        });
 
         const m = new Message({
           senderId: userId,
@@ -181,29 +196,12 @@ function initSocket(server) {
           meta: msg.meta || {},
           read: false,
         });
-        
-        // Log meta before saving to verify it's present
-        console.log("💾 Saving message with meta:", {
-          hasMeta: !!m.meta,
-          hasSenderPublicKey: !!m.meta?.senderPublicKey,
-          senderPublicKeyLength: m.meta?.senderPublicKey?.length,
-          metaKeys: Object.keys(m.meta || {})
-        });
-        
+
         await m.save();
-        
-        // Verify meta was saved correctly
-        const saved = await Message.findById(m._id);
-        console.log("✅ Message saved, verifying meta:", {
-          hasMeta: !!saved.meta,
-          hasSenderPublicKey: !!saved.meta?.senderPublicKey,
-          senderPublicKeyLength: saved.meta?.senderPublicKey?.length,
-          metaKeys: Object.keys(saved.meta || {})
-        });
 
         const payload = {
           _id: m._id,
-          id: m._id, // backwards-compatible
+          id: m._id,
           senderId: m.senderId,
           receiverId: m.receiverId,
           groupId: m.groupId,
@@ -214,18 +212,9 @@ function initSocket(server) {
           read: m.read,
         };
 
-        console.log("📤 Outgoing payload:", {
-          ciphertextLen: payload.ciphertext.length,
-          ciphertextPreview: payload.ciphertext.slice(0, 40),
-          hasMeta: !!payload.meta,
-          metaKeys: Object.keys(payload.meta || {}),
-          hasSenderPublicKey: !!payload.meta?.senderPublicKey,
-          senderPublicKeyLength: payload.meta?.senderPublicKey?.length,
-          senderPublicKeyPreview: payload.meta?.senderPublicKey?.substring(0, 50)
-        });
-
         io.to(target).emit("message", payload);
-        console.log(` ${userId}  ${target} | type=${m.type}`);
+        console.log(`📡 Sent message from ${userId} to ${target} (type=${m.type})`);
+
       } catch (err) {
         console.error(" Failed to save/send message:", err.message);
         socket.emit("errorSending", { reason: "save_error", message: err.message });
