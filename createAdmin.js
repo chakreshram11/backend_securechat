@@ -40,16 +40,19 @@ async function createAdmin() {
 
     const passwordHash = await bcrypt.hash(password, 12);
 
+    // Use configured KEY_ENCRYPT_SECRET if available; otherwise fall back to admin password
+    const keyEncryptSecret = process.env.KEY_ENCRYPT_SECRET || password;
+    if (!process.env.KEY_ENCRYPT_SECRET) {
+      console.warn("⚠️ KEY_ENCRYPT_SECRET not set; falling back to admin password for key encryption");
+    }
+
     const admin = new User({
       username,
       passwordHash,
       displayName,
       role: "admin",
       ecdhPublicKey,
-      ecdhPrivateKeyEncrypted: encryptPrivateKey(
-        ecdhPrivateKey,
-        process.env.KEY_ENCRYPT_SECRET
-      ),
+      ecdhPrivateKeyEncrypted: encryptPrivateKey(ecdhPrivateKey, keyEncryptSecret),
       canCreateGroups: true,
       canChat: true,
       canShareMedia: true,

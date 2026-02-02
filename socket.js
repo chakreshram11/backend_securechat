@@ -4,6 +4,7 @@ const jwt = require("jsonwebtoken");
 const { JWT_SECRET } = require("./config");
 const Message = require("./models/Message");
 const User = require("./models/User");
+const Group = require("./models/Group");
 
 function initSocket(server) {
   const io = new Server(server, { cors: { origin: "*" } });
@@ -64,6 +65,37 @@ function initSocket(server) {
     // Optionally let client ask for current capabilities of another user
     socket.on('getUserCapabilities', (targetUserId, cb) => {
       cb && cb(userCapabilities.get(String(targetUserId)) || null);
+    });
+
+    // Allow sockets to join/leave group rooms so broadcasts reach connected members
+    socket.on('joinGroup', async (groupId) => {
+      try {
+        if (!groupId) return;
+        const group = await Group.findById(groupId).select('members');
+        if (!group) {
+          console.warn(`⚠️ joinGroup: group not found: ${groupId}`);
+          return socket.emit('errorJoiningGroup', { reason: 'not_found', groupId });
+        }
+        const isMember = group.members.map(m => String(m)).includes(String(userId));
+        if (!isMember) {
+          console.warn(`⚠️ joinGroup: user ${userId} denied for group ${groupId} (not a member)`);
+          return socket.emit('errorJoiningGroup', { reason: 'not_a_member', groupId });
+        }
+        socket.join('group:' + groupId);
+        console.log(` ${userId} joined group:${groupId}`);
+      } catch (err) {
+        console.error('Failed to join group room:', err.message);
+      }
+    });
+
+    socket.on('leaveGroup', (groupId) => {
+      try {
+        if (!groupId) return;
+        socket.leave('group:' + groupId);
+        console.log(` ${userId} left group:${groupId}`);
+      } catch (err) {
+        console.warn('Failed to leave group room:', err.message);
+      }
     });
 
     /* ---------------- MESSAGING ---------------- */
@@ -170,7 +202,8 @@ function initSocket(server) {
         });
 
         const payload = {
-          id: m._id,
+          _id: m._id,
+          id: m._id, // backwards-compatible
           senderId: m.senderId,
           receiverId: m.receiverId,
           groupId: m.groupId,
