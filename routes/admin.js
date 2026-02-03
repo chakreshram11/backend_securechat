@@ -4,7 +4,7 @@ const User = require("../models/User");
 const Group = require("../models/Group");
 const auth = require("../middleware/auth");
 const isAdmin = require("../middleware/isAdmin");
-const { generateECDHKeyPair, encryptPrivateKey } = require("../utils/crypto");
+const { generateECDHKeyPair, encryptPrivateKey, generateGroupKey, encryptGroupKeyForMember } = require("../utils/crypto");
 
 const router = express.Router();
 
@@ -22,13 +22,13 @@ router.post("/users", auth, isAdmin, async (req, res) => {
     if (existing) return res.status(400).json({ error: "Username already exists" });
 
     const passwordHash = await bcrypt.hash(password, 12);
-    
+
     // Generate ECDH key pair on server
     const { publicKeyB64, privateKeyB64 } = generateECDHKeyPair();
-    
+
     // Encrypt private key using the actual password (not hash, since we need deterministic encryption)
     const encryptedPrivateKey = encryptPrivateKey(privateKeyB64, password);
-    
+
     const user = new User({
       username,
       passwordHash,
@@ -87,7 +87,36 @@ router.get("/groups", auth, isAdmin, async (req, res) => {
 router.post("/groups", auth, isAdmin, async (req, res) => {
   try {
     const { name, members } = req.body;
-    const group = new Group({ name, members });
+
+    // Generate a random AES key for this group
+    const groupKey = generateGroupKey();
+    console.log(`🔐 Generated group key for new group: ${name}`);
+
+    // Encrypt the group key for each member
+    const encryptedKeys = [];
+    if (members && members.length > 0) {
+      // Fetch members' public keys
+      const memberUsers = await User.find({ _id: { $in: members } }).select('_id ecdhPublicKey username');
+
+      for (const member of memberUsers) {
+        if (member.ecdhPublicKey) {
+          try {
+            const encryptedKey = encryptGroupKeyForMember(groupKey, member.ecdhPublicKey);
+            encryptedKeys.push({
+              memberId: member._id,
+              encryptedKey: encryptedKey
+            });
+            console.log(`🔑 Encrypted group key for member: ${member.username}`);
+          } catch (err) {
+            console.warn(`⚠️ Failed to encrypt group key for ${member.username}:`, err.message);
+          }
+        } else {
+          console.warn(`⚠️ Member ${member.username} has no public key - cannot encrypt group key`);
+        }
+      }
+    }
+
+    const group = new Group({ name, members, encryptedKeys });
     await group.save();
 
     const io = req.app.get("io");
@@ -105,7 +134,7 @@ router.post("/groups", auth, isAdmin, async (req, res) => {
 router.put("/groups/:id", auth, isAdmin, async (req, res) => {
   try {
     const { name, members } = req.body;
-    
+
     // Validate members array - ensure all are valid ObjectIds
     if (members && Array.isArray(members)) {
       const mongoose = require("mongoose");
@@ -113,14 +142,14 @@ router.put("/groups/:id", auth, isAdmin, async (req, res) => {
       if (validMembers.length !== members.length) {
         console.warn("⚠️ Some invalid member IDs were filtered out");
       }
-      
+
       const updateData = { name };
       if (members.length > 0) {
         updateData.members = validMembers;
       } else {
         updateData.members = []; // Allow empty groups
       }
-      
+
       const group = await Group.findByIdAndUpdate(
         req.params.id,
         updateData,
@@ -165,7 +194,7 @@ router.put("/groups/:id", auth, isAdmin, async (req, res) => {
 router.delete("/groups/:id", auth, isAdmin, async (req, res) => {
   try {
     const deletedGroup = await Group.findByIdAndDelete(req.params.id);
-    
+
     if (!deletedGroup) {
       return res.status(404).json({ error: "Group not found" });
     }

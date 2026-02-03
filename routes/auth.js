@@ -144,6 +144,35 @@ router.post('/uploadKey', auth, async (req, res) => {
   }
 });
 
+// POST /api/auth/uploadKeys - Store both public key AND encrypted private key for key recovery
+router.post('/uploadKeys', auth, async (req, res) => {
+  try {
+    const { ecdhPublicKey, ecdhPrivateKeyEncrypted } = req.body;
+
+    if (!ecdhPublicKey) {
+      return res.status(400).json({ error: "Missing ecdhPublicKey" });
+    }
+
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(404).json({ error: "User not found" });
+
+    user.ecdhPublicKey = ecdhPublicKey;
+
+    // Store encrypted private key if provided (allows key recovery on other devices)
+    if (ecdhPrivateKeyEncrypted) {
+      user.ecdhPrivateKeyEncrypted = ecdhPrivateKeyEncrypted;
+      console.log(`🔐 Stored encrypted private key for user: ${user.username}`);
+    }
+
+    await user.save();
+
+    res.json({ ok: true, message: "Keys saved successfully" });
+  } catch (err) {
+    console.error("❌ uploadKeys error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
 // POST /api/auth/generateKeys - Generate keys on backend when Web Crypto is not available
 router.post('/generateKeys', auth, async (req, res) => {
   try {
