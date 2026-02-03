@@ -10,6 +10,7 @@ const usersRoutes = require('./routes/users');
 const messagesRoutes = require('./routes/messages');
 const adminRoutes = require('./routes/admin');
 const filesRoutes = require('./routes/files');
+const groupsRoutes = require('./routes/groups');
 const { initSocket } = require('./socket');
 
 // Load File model to ensure it's registered with Mongoose
@@ -45,6 +46,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/users', usersRoutes);
 app.use('/api/messages', messagesRoutes);
 app.use('/api/files', filesRoutes);
+app.use('/api/groups', groupsRoutes);
 
 // Static files (for uploaded media)
 app.use('/files', express.static('files'));
