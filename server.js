@@ -47,6 +47,7 @@ app.use('/api/users', usersRoutes);
 app.use('/api/messages', messagesRoutes);
 app.use('/api/files', filesRoutes);
 app.use('/api/groups', groupsRoutes);
+app.use('/api/notifications', require('./routes/notifications'));
 
 // Static files (for uploaded media)
 app.use('/files', express.static('files'));

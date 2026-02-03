@@ -2,11 +2,44 @@ const express = require("express");
 const bcrypt = require("bcrypt");
 const User = require("../models/User");
 const Group = require("../models/Group");
+const AuditLog = require("../models/AuditLog");
+const Notification = require("../models/Notification");
 const auth = require("../middleware/auth");
 const isAdmin = require("../middleware/isAdmin");
 const { generateECDHKeyPair, encryptPrivateKey, generateGroupKey, encryptGroupKeyForMember } = require("../utils/crypto");
 
 const router = express.Router();
+
+/* -------- Audit Logs -------- */
+router.get("/audit-logs", auth, isAdmin, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 50;
+    const skip = (page - 1) * limit;
+
+    const logs = await AuditLog.find()
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .populate('adminId', 'username displayName')
+      .populate('targetUserId', 'username displayName');
+
+    const total = await AuditLog.countDocuments();
+
+    res.json({
+      logs,
+      pagination: {
+        page,
+        limit,
+        total,
+        pages: Math.ceil(total / limit)
+      }
+    });
+  } catch (err) {
+    console.error("❌ Get audit logs error:", err);
+    res.status(500).json({ error: "Failed to get audit logs" });
+  }
+});
 
 /* -------- User Management -------- */
 router.get("/users", auth, isAdmin, async (req, res) => {
@@ -238,7 +271,38 @@ router.post("/users/:id/reset-password", auth, isAdmin, async (req, res) => {
 
     await user.save();
 
-    console.log(`✅ Admin reset password for user: ${user.username}`);
+    // Get admin info for logging
+    const admin = await User.findById(req.user.id).select('username displayName');
+    const adminName = admin?.displayName || admin?.username || 'Unknown Admin';
+
+    // Create audit log
+    await AuditLog.create({
+      action: 'PASSWORD_RESET',
+      adminId: req.user.id,
+      targetUserId: user._id,
+      details: `Password reset by ${adminName}`,
+      ipAddress: req.ip || req.headers['x-forwarded-for'] || 'unknown'
+    });
+
+    // Create notification for the user
+    await Notification.create({
+      userId: user._id,
+      type: 'PASSWORD_RESET',
+      title: '🔐 Password Reset Alert',
+      message: `Your password was reset by an administrator (${adminName}) on ${new Date().toLocaleString()}. If you did not request this, please contact support immediately.`
+    });
+
+    // Emit notification via socket if available
+    const io = req.app.get('io');
+    if (io) {
+      io.to(`user:${user._id}`).emit('notification', {
+        type: 'PASSWORD_RESET',
+        title: '🔐 Password Reset Alert',
+        message: `Your password was reset by an administrator.`
+      });
+    }
+
+    console.log(`✅ Admin reset password for user: ${user.username} (logged and notified)`);
 
     res.json({ ok: true, message: `Password reset for ${user.username}` });
   } catch (err) {
