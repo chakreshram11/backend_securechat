@@ -211,4 +211,40 @@ router.delete("/groups/:id", auth, isAdmin, async (req, res) => {
   }
 });
 
+/* -------- Admin Resets User Password -------- */
+router.post("/users/:id/reset-password", auth, isAdmin, async (req, res) => {
+  try {
+    const { newPassword } = req.body;
+
+    if (!newPassword) {
+      return res.status(400).json({ error: "New password is required" });
+    }
+
+    if (newPassword.length < 6) {
+      return res.status(400).json({ error: "Password must be at least 6 characters" });
+    }
+
+    const user = await User.findById(req.params.id);
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    // Hash new password
+    const newPasswordHash = await bcrypt.hash(newPassword, 12);
+    user.passwordHash = newPasswordHash;
+
+    // Clear encrypted private key - user will need to regenerate
+    user.ecdhPrivateKeyEncrypted = null;
+
+    await user.save();
+
+    console.log(`✅ Admin reset password for user: ${user.username}`);
+
+    res.json({ ok: true, message: `Password reset for ${user.username}` });
+  } catch (err) {
+    console.error("❌ Admin reset password error:", err);
+    res.status(500).json({ error: "Failed to reset password" });
+  }
+});
+
 module.exports = router;

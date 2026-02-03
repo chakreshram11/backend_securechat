@@ -203,5 +203,48 @@ router.post('/generateKeys', auth, async (req, res) => {
   }
 });
 
+/* -------- User Changes Own Password -------- */
+router.post("/change-password", auth, async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ error: "Current and new password are required" });
+    }
+
+    if (newPassword.length < 6) {
+      return res.status(400).json({ error: "New password must be at least 6 characters" });
+    }
+
+    const user = await User.findById(req.user.id);
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    // Verify current password
+    const isMatch = await bcrypt.compare(currentPassword, user.passwordHash);
+    if (!isMatch) {
+      return res.status(401).json({ error: "Current password is incorrect" });
+    }
+
+    // Hash new password
+    const newPasswordHash = await bcrypt.hash(newPassword, 12);
+    user.passwordHash = newPasswordHash;
+
+    // Note: Client should re-encrypt private key with new password and upload
+    // We clear the server-stored encrypted key to force re-encryption
+    user.ecdhPrivateKeyEncrypted = null;
+
+    await user.save();
+
+    console.log(`✅ Password changed for user: ${user.username}`);
+
+    res.json({ ok: true, message: "Password changed successfully" });
+  } catch (err) {
+    console.error("❌ Change password error:", err);
+    res.status(500).json({ error: "Failed to change password" });
+  }
+});
+
 
 module.exports = router;
