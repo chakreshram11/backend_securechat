@@ -212,7 +212,13 @@ function initSocket(server) {
           read: m.read,
         };
 
-        io.to(target).emit("message", payload);
+        // For group messages, use socket.to() to exclude sender (prevents duplicate)
+        // For direct messages, use io.to() to ensure recipient receives it
+        if (msg.groupId) {
+          socket.to(target).emit("message", payload);
+        } else {
+          io.to(target).emit("message", payload);
+        }
         console.log(`📡 Sent message from ${userId} to ${target} (type=${m.type})`);
 
       } catch (err) {
