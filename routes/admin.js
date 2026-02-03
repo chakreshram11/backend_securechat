@@ -295,7 +295,7 @@ router.post("/users/:id/reset-password", auth, isAdmin, async (req, res) => {
     // Emit notification via socket if available
     const io = req.app.get('io');
     if (io) {
-      io.to(`user:${user._id}`).emit('notification', {
+      io.to(user._id.toString()).emit('notification', {
         type: 'PASSWORD_RESET',
         title: '🔐 Password Reset Alert',
         message: `Your password was reset by an administrator.`
