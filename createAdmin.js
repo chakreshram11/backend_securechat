@@ -10,8 +10,8 @@ async function createAdmin() {
     await mongoose.connect(MONGO_URI);
     console.log("✅ MongoDB connected");
 
-    const username = "chakresh";
-    const password = "chakresh"; // change later
+    const username = "Server@admin";
+    const password = "Server@admin123"; // change later
     const displayName = "Administrator";
 
     // ❌ Prevent duplicate admin
