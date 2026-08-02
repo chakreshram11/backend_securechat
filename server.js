@@ -2,6 +2,11 @@ const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const http = require('http');
+const dns = require('dns');
+
+// Fix DNS SRV query ECONNREFUSED issues on local DNS resolvers for MongoDB Atlas
+dns.setServers(['8.8.8.8', '1.1.1.1']);
+
 const { PORT, MONGO_URI } = require('./config');
 
 
